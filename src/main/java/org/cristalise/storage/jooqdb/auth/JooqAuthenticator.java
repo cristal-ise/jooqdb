@@ -23,9 +23,11 @@ package org.cristalise.storage.jooqdb.auth;
 import java.util.List;
 import java.util.UUID;
 
-import org.cristalise.kernel.common.InvalidDataException;
-import org.cristalise.kernel.common.ObjectNotFoundException;
+import org.cristalise.kernel.common.AccessRightsException;
 import org.cristalise.kernel.common.PersistencyException;
+import org.cristalise.kernel.lookup.AgentPath;
+import org.cristalise.kernel.lookup.ItemPath;
+import org.cristalise.kernel.process.Gateway;
 import org.cristalise.kernel.process.auth.Authenticator;
 import org.cristalise.kernel.property.BuiltInItemProperties;
 import org.cristalise.kernel.property.Property;
@@ -45,7 +47,7 @@ public class JooqAuthenticator implements Authenticator {
     private Argon2Password paswordHasher;
 
     @Override
-    public boolean authenticate(String resource) throws InvalidDataException, ObjectNotFoundException {
+    public boolean authenticate(String resource) throws AccessRightsException {
         try {
             context = JooqHandler.connect();
 
@@ -60,26 +62,49 @@ public class JooqAuthenticator implements Authenticator {
             return true;
         }
         catch (PersistencyException e) {
-            throw new InvalidDataException(e.getMessage());
+            throw new AccessRightsException(e.getMessage());
         }
     }
 
     @Override
-    public boolean authenticate(String agentName, String password, String resource) throws InvalidDataException, ObjectNotFoundException {
-        if (context == null) if (!authenticate(resource)) return false;
+    public String authenticate(String agentName, String password, String resource) throws AccessRightsException {
+    	
+    	if (context == null) {
+    		if ( ! authenticate(resource)) {
+    			throw new AccessRightsException("Authentication failed, could not initialize Authenticator");
+    		}
+    	}
+    	
+        AccessRightsException failedLoginException = new AccessRightsException("Authentication failed, username-password combination does not exist");
 
-        List<UUID> uuids = properties.findItems(context, new Property(BuiltInItemProperties.NAME, agentName), new Property(BuiltInItemProperties.TYPE, "Agent"));
+        List<UUID> uuids;
+        try {
+        	uuids = properties.findItems(context, new Property(BuiltInItemProperties.NAME, agentName), new Property(BuiltInItemProperties.TYPE, "Agent"));
+        }
+        catch (Exception e) {
+        	throw failedLoginException;
+        }
 
-        if (uuids.size() == 0) throw new ObjectNotFoundException("Cannot find agent:"+agentName);
-        if (uuids.size() != 1) throw new InvalidDataException("Umbiguous name for agent:"+agentName);
+        if (null == uuids || uuids.size() != 1) {
+        	throw failedLoginException;
+        }
+
+        AgentPath agent = new AgentPath(new ItemPath(uuids.get(0)), agentName);
 
         try {
-            return paswordHasher.checkPassword(items.fetchPassword(context, uuids.get(0)), password.toCharArray());
+        	if ( ! paswordHasher.checkPassword(items.fetchPassword(context, agent.getUUID()), password.toCharArray()) ) {
+        		throw failedLoginException;
+        	}
         }
         catch (PersistencyException e) {
-            Logger.error(e);
-            throw new InvalidDataException("Problem authenticating agent:"+agentName+" error:"+e.getMessage());
+        	Logger.error(e);
+        	throw failedLoginException;
         }
+        catch (Exception e) {
+        	throw failedLoginException;
+        }
+
+        return Gateway.getAuthManager().generateToken( agent );        
     }
 
     @Override
@@ -88,7 +113,7 @@ public class JooqAuthenticator implements Authenticator {
             try {
                 authenticate(null);
             }
-            catch (InvalidDataException | ObjectNotFoundException e) {
+            catch (AccessRightsException e) {
                 Logger.error(e);
             }
         }

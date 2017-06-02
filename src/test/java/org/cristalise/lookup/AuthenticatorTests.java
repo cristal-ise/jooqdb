@@ -20,6 +20,8 @@
  */
 package org.cristalise.lookup;
 
+import static org.junit.Assert.*;
+
 import org.cristalise.kernel.lookup.AgentPath;
 import org.cristalise.kernel.lookup.ItemPath;
 import org.cristalise.kernel.process.Gateway;
@@ -65,11 +67,12 @@ public class AuthenticatorTests {
     }
 
     @Test @Ignore
-    public void authentcateUser() throws Exception {
+    public void authenticateUser() throws Exception {
         AgentPath agent = new AgentPath(new ItemPath(), "dummyUser");
         lookup.add(agent);
         lookup.setAgentPassword(agent, "123456");
 
-        assert auth.authenticate("dummyUser", "123456", null);
+        String authToken = auth.authenticate("dummyUser", "123456", null);
+		assertTrue(authToken.length() > 0);
     }
 }
