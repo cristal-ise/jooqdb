@@ -34,15 +34,18 @@ import org.cristalise.kernel.common.PersistencyException;
 import org.cristalise.kernel.lookup.AgentPath;
 import org.cristalise.kernel.lookup.ItemPath;
 import org.cristalise.kernel.lookup.Path;
+import org.cristalise.kernel.process.Gateway;
 import org.cristalise.kernel.property.BuiltInItemProperties;
 import org.cristalise.kernel.property.Property;
 import org.cristalise.storage.jooqdb.JooqHandler;
 import org.cristalise.storage.jooqdb.clusterStore.JooqItemPropertyHandler;
 import org.jooq.DSLContext;
 import org.jooq.Field;
+import org.jooq.InsertSetMoreStep;
 import org.jooq.Record;
 import org.jooq.Result;
 import org.jooq.Table;
+import org.jooq.UpdateSetMoreStep;
 import org.jooq.impl.SQLDataType;
 
 /**
@@ -51,28 +54,32 @@ import org.jooq.impl.SQLDataType;
 public class JooqItemHandler {
     static final Table<?> ITEM_TABLE = table(name("ITEM"));
 
-    static final Field<UUID>    UUID     = field(name("UUID"),     UUID.class);
-    static final Field<String > IOR      = field(name("IOR"),      String.class);
-    static final Field<Boolean> IS_AGENT = field(name("IS_AGENT"), Boolean.class);
-    static final Field<String>  PASSWORD = field(name("PASSWORD"), String.class);
+    static final Field<UUID>    UUID                  = field(name("UUID"),                  UUID.class);
+    static final Field<String > IOR                   = field(name("IOR"),                   String.class);
+    static final Field<Boolean> IS_AGENT              = field(name("IS_AGENT"),              Boolean.class);
+    static final Field<Boolean> IS_PASSWORD_TEMPORARY = field(name("IS_PASSWORD_TEMPORARY"), Boolean.class);
+    static final Field<String>  PASSWORD              = field(name("PASSWORD"),              String.class);
 
     public void createTables(DSLContext context) throws PersistencyException {
         context.createTableIfNotExists(ITEM_TABLE)
-        .column(UUID,     JooqHandler.UUID_TYPE    .nullable(false))
-        .column(IOR,      JooqHandler.STRING_TYPE  .nullable(true))
-        .column(IS_AGENT, SQLDataType.BOOLEAN      .nullable(false))
-        .column(PASSWORD, JooqHandler.STRING_TYPE  .nullable(true))
+        .column(UUID,                  JooqHandler.UUID_TYPE    .nullable(false))
+        .column(IOR,                   JooqHandler.STRING_TYPE  .nullable(true))
+        .column(IS_AGENT,              SQLDataType.BOOLEAN      .nullable(false))
+        .column(IS_PASSWORD_TEMPORARY, SQLDataType.BOOLEAN      .nullable(true))
+        .column(PASSWORD,              JooqHandler.STRING_TYPE  .nullable(true))
         .constraints(
                 constraint("PK_"+ITEM_TABLE).primaryKey(UUID))
         .execute();
     }
 
-    public int updatePassword(DSLContext context, AgentPath agent, String password) throws PersistencyException {
-        return context
+    public int updatePassword(DSLContext context, AgentPath agent, String password, boolean temporary) throws PersistencyException {
+        UpdateSetMoreStep<?> update = context
                 .update(ITEM_TABLE)
-                .set(PASSWORD, password)
-                .where(UUID.equal(agent.getUUID()))
-                .execute();
+                .set(PASSWORD, password);
+
+        if (Gateway.getProperties().getBoolean("JOOQ.TemporaryPwdFieldImplemented", true)) update.set(IS_PASSWORD_TEMPORARY, temporary);
+
+        return update.where(UUID.equal(agent.getUUID())).execute();
     }
 
     public int updateIOR(DSLContext context, ItemPath item, String ior) throws PersistencyException {
@@ -102,12 +109,15 @@ public class JooqItemHandler {
     }
 
     public int insert(DSLContext context, AgentPath agentPath, JooqItemPropertyHandler properties) throws PersistencyException {
-        int rows = context
-                .insertInto(ITEM_TABLE)
-                .set(UUID,     agentPath.getUUID())
-                .set(IOR,      agentPath.getIORString())
-                .set(IS_AGENT, true)
-                .execute();
+        InsertSetMoreStep<?> insert = context.insertInto(ITEM_TABLE)
+                                             .set(UUID,                  agentPath.getUUID())
+                                             .set(IOR,                   agentPath.getIORString())
+                                             .set(IS_AGENT,              true);
+
+        if (Gateway.getProperties().getBoolean("JOOQ.TemporaryPwdFieldImplemented", true)) 
+            insert.set(IS_PASSWORD_TEMPORARY, agentPath.isPasswordTemporary());
+
+        int rows = insert.execute();
 
         if (rows != 1) throw new PersistencyException("Insert into ITEM table rows:"+rows);
 
@@ -160,8 +170,15 @@ public class JooqItemHandler {
             else                                              uuid = record.get(UUID);
 
             //Reading IS_AGENT boolean is done this way because of a bug in jooq supporting MySQL: check issue #23
-            boolean isAgent = record.get(IS_AGENT.getName(), Boolean.class);
-            String  ior     = record.get(IOR);
+            boolean isAgent   = record.get(IS_AGENT.getName(), Boolean.class);
+            String  ior       = record.get(IOR);
+
+            Boolean isTempPwd = false;
+            
+            try {
+                isTempPwd = record.get(IS_PASSWORD_TEMPORARY.getName(), Boolean.class);
+            }
+            catch (IllegalArgumentException e) {}
 
             String nameProp = BuiltInItemProperties.NAME.toString();
 
@@ -171,7 +188,7 @@ public class JooqItemHandler {
                 if (record.field(nameProp) != null) name = record.get(nameProp, String.class);
                 else                                name = ((Property)properties.fetch(context, uuid, nameProp)).getValue();
 
-                return new AgentPath(uuid, ior, name);
+                return new AgentPath(uuid, ior, name, isTempPwd != null ? isTempPwd : false);
             }
             else
                 return new ItemPath(uuid, ior);

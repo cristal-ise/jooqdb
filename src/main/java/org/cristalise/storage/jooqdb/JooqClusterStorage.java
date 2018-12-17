@@ -42,6 +42,7 @@ import org.cristalise.storage.jooqdb.clusterStore.JooqHistoryHandler;
 import org.cristalise.storage.jooqdb.clusterStore.JooqItemPropertyHandler;
 import org.cristalise.storage.jooqdb.clusterStore.JooqJobHandler;
 import org.cristalise.storage.jooqdb.clusterStore.JooqLifecycleHandler;
+import org.cristalise.storage.jooqdb.clusterStore.JooqOutcomeAttachmentHandler;
 import org.cristalise.storage.jooqdb.clusterStore.JooqOutcomeHandler;
 import org.cristalise.storage.jooqdb.clusterStore.JooqViewpointHandler;
 import org.jooq.DSLContext;
@@ -82,6 +83,7 @@ public class JooqClusterStorage extends TransactionalClusterStorage {
         jooqHandlers.put(ClusterType.COLLECTION, new JooqCollectionHadler());
         jooqHandlers.put(ClusterType.HISTORY,    new JooqHistoryHandler());
         jooqHandlers.put(ClusterType.JOB,        new JooqJobHandler());
+        jooqHandlers.put(ClusterType.ATTACHMENT, new JooqOutcomeAttachmentHandler());
 
         for (JooqHandler handler: jooqHandlers.values()) handler.createTables(context);
 
@@ -268,12 +270,18 @@ public class JooqClusterStorage extends TransactionalClusterStorage {
             Logger.msg(5, "JooqClusterStorage.put() - uuid:"+uuid+" cluster:"+cluster+" path:"+obj.getClusterPath());
             handler.put(context, uuid, obj);
         }
-        else
-            throw new PersistencyException("Write is not supported for cluster:'"+cluster+"'");
-
-        if (ClusterType.OUTCOME == cluster) {
-            for (JooqDomainHandler domainHandler : domainHandlers) domainHandler.put(context, uuid, (Outcome)obj);
+        else {
+        	throw new PersistencyException("Write is not supported for cluster:'"+cluster+"'");
         }
+           
+        for (JooqDomainHandler domainHandler : domainHandlers) {
+        	if (ClusterType.OUTCOME == cluster) {
+        		domainHandler.put(context, uuid, (Outcome)obj);	
+        	} else if (Gateway.getProperties().getBoolean("DomainHandler.enableFullTrigger", false)) {
+        		domainHandler.put(context, uuid, obj);
+        	} 
+        }
+        
     }
 
     @Override

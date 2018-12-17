@@ -48,6 +48,7 @@ import org.cristalise.kernel.lookup.ItemPath;
 import org.cristalise.kernel.lookup.LookupManager;
 import org.cristalise.kernel.lookup.Path;
 import org.cristalise.kernel.lookup.RolePath;
+import org.cristalise.kernel.process.Gateway;
 import org.cristalise.kernel.process.auth.Authenticator;
 import org.cristalise.kernel.property.Property;
 import org.cristalise.kernel.property.PropertyDescriptionList;
@@ -270,8 +271,10 @@ public class JooqLookupManager implements LookupManager {
         if (!exists(agentPath)) throw new ObjectNotFoundException("Path does not exist:"+agentPath);
 
         try {
-            AgentPath ap = (AgentPath)items.fetch(context, agentPath.getUUID(), properties);
-            return ap.getAgentName();
+            ItemPath ip = items.fetch(context, agentPath.getUUID(), properties);
+            
+            if (ip instanceof AgentPath) return ((AgentPath)ip).getAgentName();
+            else                         throw new ObjectNotFoundException("Path is not an agent:"+agentPath);
         }
         catch (PersistencyException e) {
             Logger.error(e);
@@ -451,6 +454,9 @@ public class JooqLookupManager implements LookupManager {
                 JooqItemHandler.IS_AGENT,
                 JooqItemPropertyHandler.VALUE.as("Name"));
 
+        if (Gateway.getProperties().getBoolean("JOOQ.TemporaryPwdFieldImplemented", true)) 
+            select.addSelect(JooqItemHandler.IS_PASSWORD_TEMPORARY);
+
         select.addOrderBy(field(name("Name")));
 
         if (limit  > 0) select.addLimit(limit);
@@ -533,10 +539,15 @@ public class JooqLookupManager implements LookupManager {
 
     @Override
     public void setAgentPassword(AgentPath agent, String newPassword) throws ObjectNotFoundException, ObjectCannotBeUpdated, NoSuchAlgorithmException {
+        setAgentPassword(agent, newPassword, false);
+    }
+
+    @Override
+    public void setAgentPassword(AgentPath agent, String newPassword, boolean temporary) throws ObjectNotFoundException, ObjectCannotBeUpdated, NoSuchAlgorithmException {
         if (!exists(agent)) throw new ObjectNotFoundException("Agent:"+agent);
 
         try {
-            int rows = items.updatePassword(context, agent, passwordHasher.hashPassword(newPassword.toCharArray()));
+            int rows = items.updatePassword(context, agent, passwordHasher.hashPassword(newPassword.toCharArray()), temporary);
             if (rows != 1) throw new ObjectCannotBeUpdated("Agent:"+agent);
         }
         catch (Exception e) {
